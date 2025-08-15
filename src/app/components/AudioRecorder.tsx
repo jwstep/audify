@@ -1,11 +1,12 @@
 'use client';
 
 import { useState, useRef, useCallback } from 'react';
-import { Mic, Upload, Play, Square, Trash2, FileAudio, BarChart3 } from 'lucide-react';
+import { Mic, Upload, Play, Square, Trash2, FileAudio, BarChart3, Brain, Sparkles } from 'lucide-react';
 import AudioVisualizer from './AudioVisualizer';
 import SpectralAnalyzer from './SpectralAnalyzer';
 import RealTimeProcessor from './RealTimeProcessor';
 import { AudioAnalyzer, AudioFeatures } from '../services/audioAnalysis';
+import { AIRecognitionEngine, AIRecognitionResult, RecognitionProgress } from '../services/aiRecognitionEngine';
 
 interface AudioData {
   blob: Blob;
@@ -22,11 +23,22 @@ export default function AudioRecorder() {
   const [recognitionResult, setRecognitionResult] = useState<string>('');
   const [audioFeatures, setAudioFeatures] = useState<AudioFeatures | null>(null);
   const [showAdvancedAnalysis, setShowAdvancedAnalysis] = useState(false);
+  const [aiRecognitionResult, setAiRecognitionResult] = useState<AIRecognitionResult | null>(null);
+  const [recognitionProgress, setRecognitionProgress] = useState<RecognitionProgress | null>(null);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioAnalyzerRef = useRef<AudioAnalyzer | null>(null);
+  const aiEngineRef = useRef<AIRecognitionEngine | null>(null);
+
+  // Initialize AI engine
+  const getAIEngine = useCallback(() => {
+    if (!aiEngineRef.current) {
+      aiEngineRef.current = new AIRecognitionEngine();
+    }
+    return aiEngineRef.current;
+  }, []);
 
   // Start recording
   const startRecording = useCallback(async () => {
@@ -37,27 +49,29 @@ export default function AudioRecorder() {
       audioChunksRef.current = [];
 
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
+        if (event.data.size > 0 && audioChunksRef.current) {
           audioChunksRef.current.push(event.data);
         }
       };
 
       mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        const audioUrl = URL.createObjectURL(audioBlob);
-        
-        // Create audio element to get duration
-        const audio = new Audio(audioUrl);
-        audio.onloadedmetadata = () => {
-          setAudioData({
-            blob: audioBlob,
-            url: audioUrl,
-            duration: audio.duration,
-            timestamp: new Date()
-          });
-        };
-        
-        stream.getTracks().forEach(track => track.stop());
+        if (audioChunksRef.current) {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+          const audioUrl = URL.createObjectURL(audioBlob);
+          
+          // Create audio element to get duration
+          const audio = new Audio(audioUrl);
+          audio.onloadedmetadata = () => {
+            setAudioData({
+              blob: audioBlob,
+              url: audioUrl,
+              duration: audio.duration,
+              timestamp: new Date()
+            });
+          };
+          
+          stream.getTracks().forEach(track => track.stop());
+        }
       };
 
       mediaRecorder.start();
@@ -99,6 +113,8 @@ export default function AudioRecorder() {
       setIsAnalyzing(false);
       setAudioFeatures(null);
       setShowAdvancedAnalysis(false);
+      setAiRecognitionResult(null);
+      setRecognitionProgress(null);
     }
   }, [audioData]);
 
@@ -145,108 +161,74 @@ export default function AudioRecorder() {
     }
   }, []);
 
-  // Analyze audio with advanced features
+  // Analyze audio with AI recognition
   const analyzeAudio = useCallback(async () => {
     if (!audioData) return;
     
     setIsAnalyzing(true);
     setRecognitionResult('');
     setAudioFeatures(null);
+    setAiRecognitionResult(null);
+    setRecognitionProgress(null);
     
     try {
-      // Initialize audio analyzer
+      // Get AI engine
+      const aiEngine = getAIEngine();
+      
+      // Check if AI is available
+      if (!aiEngine.isAIAvailable()) {
+        throw new Error('AI services are still initializing. Please wait a moment and try again.');
+      }
+      
+      // Perform AI recognition with progress tracking
+      const result = await aiEngine.recognizeAudio(audioData.blob, (progress) => {
+        setRecognitionProgress(progress);
+      });
+      
+      // Set AI recognition result
+      setAiRecognitionResult(result);
+      
+      // Generate enhanced recognition result
+      const summary = aiEngine.getRecognitionSummary(result);
+      setRecognitionResult(summary);
+      
+      // Also get spectral features for backward compatibility
       if (!audioAnalyzerRef.current) {
         audioAnalyzerRef.current = new AudioAnalyzer();
       }
-      
-      // Perform advanced analysis with timeout
-      const features = await Promise.race([
-        audioAnalyzerRef.current.analyzeAudio(audioData.blob),
-        new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('Analysis timed out after 10 seconds')), 10000)
-        )
-      ]);
-      
-      // Generate enhanced recognition result
-      const result = generateEnhancedResult(features);
-      setRecognitionResult(result);
+      const features = await audioAnalyzerRef.current.analyzeAudio(audioData.blob);
       setAudioFeatures(features);
+      
       setShowAdvancedAnalysis(true);
       
     } catch (error) {
-      console.error('Audio analysis error:', error);
-      let errorMessage = '❌ Error analyzing audio. ';
+      console.error('AI recognition error:', error);
+      let errorMessage = '❌ AI recognition failed. ';
       
       if (error instanceof Error) {
-        if (error.message.includes('timeout')) {
-          errorMessage += 'Analysis took too long. Please try with a shorter audio file.';
-        } else {
-          errorMessage += error.message;
-        }
+        errorMessage += error.message;
       } else {
         errorMessage += 'Please try again.';
       }
       
       setRecognitionResult(errorMessage);
+      
+      // Fallback to basic analysis
+      try {
+        if (!audioAnalyzerRef.current) {
+          audioAnalyzerRef.current = new AudioAnalyzer();
+        }
+        const features = await audioAnalyzerRef.current.analyzeAudio(audioData.blob);
+        setAudioFeatures(features);
+        setShowAdvancedAnalysis(true);
+      } catch (fallbackError) {
+        console.error('Fallback analysis also failed:', fallbackError);
+      }
     } finally {
       setIsAnalyzing(false);
+      setRecognitionProgress(null);
     }
-  }, [audioData]);
-
-  // Generate enhanced recognition result based on audio features
-  const generateEnhancedResult = (features: AudioFeatures): string => {
-    let result = '🎵 Audio Analysis Results:\n\n';
-    
-    // Analyze frequency characteristics
-    if (features.pitch > 0) {
-      if (features.pitch < 200) {
-        result += '🎤 Low-pitched audio detected\n';
-      } else if (features.pitch < 800) {
-        result += '🎤 Mid-pitched audio detected\n';
-      } else {
-        result += '🎤 High-pitched audio detected\n';
-      }
-    }
-    
-    // Analyze tempo
-    if (features.tempo > 0) {
-      if (features.tempo < 80) {
-        result += '🐌 Slow tempo detected\n';
-      } else if (features.tempo < 120) {
-        result += '🐢 Moderate tempo detected\n';
-      } else {
-        result += '🚀 Fast tempo detected\n';
-      }
-    }
-    
-    // Analyze spectral characteristics
-    if (features.spectralFlatness < 0.1) {
-      result += '🎼 Harmonic content detected (likely music)\n';
-    } else if (features.spectralFlatness > 0.5) {
-      result += '🔊 Noise-like audio detected\n';
-    }
-    
-    // Analyze frequency distribution
-    const { low, mid, high } = features.frequencyBands;
-    const total = low + mid + high;
-    if (total > 0) {
-      const lowPercent = (low / total) * 100;
-      const midPercent = (mid / total) * 100;
-      const highPercent = (high / total) * 100;
-      
-      if (lowPercent > 50) {
-        result += '🔈 Bass-heavy audio\n';
-      } else if (midPercent > 50) {
-        result += '🎵 Mid-range dominant\n';
-      } else if (highPercent > 50) {
-        result += '🔊 High-frequency dominant\n';
-      }
-    }
-    
-    result += '\n📊 Advanced metrics available in Spectral Analysis';
-    
-    return result;
-  };
+  }, [audioData, getAIEngine]);
 
   // Handle real-time audio data
   const handleRealTimeAudioData = useCallback((data: Float32Array) => {
@@ -358,7 +340,7 @@ export default function AudioRecorder() {
                 </button>
               </div>
 
-              {/* Analyze Button */}
+              {/* AI Recognition Button */}
               <button
                 onClick={analyzeAudio}
                 disabled={isAnalyzing}
@@ -367,19 +349,33 @@ export default function AudioRecorder() {
                 {isAnalyzing ? (
                   <div className="flex items-center justify-center gap-2">
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    Analyzing Audio...
+                    <Brain className="w-4 h-4" />
+                    AI Recognition...
                   </div>
                 ) : (
-                  'Analyze with AI'
+                  <div className="flex items-center justify-center gap-2">
+                    <Sparkles className="w-4 h-4" />
+                    Analyze with AI
+                  </div>
                 )}
               </button>
 
-              {/* Analysis Progress */}
-              {isAnalyzing && (
-                <div className="mt-3 text-center">
-                  <p className="text-sm text-slate-400">
-                    Processing audio features... This may take a few seconds for longer files.
-                  </p>
+              {/* Recognition Progress */}
+              {recognitionProgress && (
+                <div className="mt-4 p-4 bg-white/5 rounded-lg border border-white/10">
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-sm font-medium text-white">{recognitionProgress.message}</span>
+                  </div>
+                  <div className="w-full bg-slate-700 rounded-full h-2">
+                    <div 
+                      className="bg-gradient-to-r from-purple-500 to-blue-500 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${recognitionProgress.progress}%` }}
+                    />
+                  </div>
+                  <div className="text-right mt-1">
+                    <span className="text-xs text-slate-400">{recognitionProgress.progress}%</span>
+                  </div>
                 </div>
               )}
 
@@ -403,6 +399,54 @@ export default function AudioRecorder() {
         </div>
       )}
 
+      {/* AI Recognition Results */}
+      {aiRecognitionResult && (
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 border border-white/20">
+          <div className="flex items-center gap-3 mb-6">
+            <Brain className="w-8 h-8 text-purple-400" />
+            <h3 className="text-2xl font-semibold text-white">AI Recognition Results</h3>
+            <div className="ml-auto px-3 py-1 bg-green-500/20 border border-green-500/30 rounded-full">
+              <span className="text-green-400 text-sm font-medium">
+                {(aiRecognitionResult.confidence * 100).toFixed(1)}% Confidence
+              </span>
+            </div>
+          </div>
+          
+          <div className="bg-white/5 rounded-lg p-6 border border-white/10">
+            <pre className="text-slate-300 whitespace-pre-wrap font-medium text-sm leading-relaxed">
+              {recognitionResult}
+            </pre>
+          </div>
+          
+          {/* AI Insights */}
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white/5 rounded-lg p-4 border border-white/10">
+              <h4 className="text-lg font-medium text-white mb-3">🎯 Audio Type</h4>
+              <p className="text-slate-300 capitalize">{aiRecognitionResult.audioType}</p>
+            </div>
+            
+            {aiRecognitionResult.language && (
+              <div className="bg-white/5 rounded-lg p-4 border border-white/10">
+                <h4 className="text-lg font-medium text-white mb-3">🌍 Language</h4>
+                <p className="text-slate-300">{aiRecognitionResult.language}</p>
+              </div>
+            )}
+            
+            {aiRecognitionResult.sentiment && (
+              <div className="bg-white/5 rounded-lg p-4 border border-white/10">
+                <h4 className="text-lg font-medium text-white mb-3">😊 Sentiment</h4>
+                <p className="text-slate-300 capitalize">{aiRecognitionResult.sentiment}</p>
+              </div>
+            )}
+            
+            <div className="bg-white/5 rounded-lg p-4 border border-white/10">
+              <h4 className="text-lg font-medium text-white mb-3">⏱️ Analysis Time</h4>
+              <p className="text-slate-300">{aiRecognitionResult.analysisTime}ms</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Advanced Analysis */}
       {showAdvancedAnalysis && audioFeatures && (
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 border border-white/20">
@@ -413,10 +457,10 @@ export default function AudioRecorder() {
         </div>
       )}
 
-      {/* Recognition Results */}
-      {recognitionResult && (
+      {/* Legacy Recognition Results (fallback) */}
+      {recognitionResult && !aiRecognitionResult && (
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 border border-white/20">
-          <h3 className="text-xl font-semibold text-white mb-4">AI Recognition Results</h3>
+          <h3 className="text-xl font-semibold text-white mb-4">Recognition Results</h3>
           <div className="bg-white/5 rounded-lg p-4 border border-white/10">
             <pre className="text-slate-300 whitespace-pre-wrap font-medium">{recognitionResult}</pre>
           </div>
