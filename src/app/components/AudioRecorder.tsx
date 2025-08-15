@@ -159,18 +159,35 @@ export default function AudioRecorder() {
         audioAnalyzerRef.current = new AudioAnalyzer();
       }
       
-      // Perform advanced analysis
-      const features = await audioAnalyzerRef.current.analyzeAudio(audioData.blob);
-      setAudioFeatures(features);
+      // Perform advanced analysis with timeout
+      const features = await Promise.race([
+        audioAnalyzerRef.current.analyzeAudio(audioData.blob),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Analysis timed out after 10 seconds')), 10000)
+        )
+      ]);
       
       // Generate enhanced recognition result
       const result = generateEnhancedResult(features);
       setRecognitionResult(result);
-      
+      setAudioFeatures(features);
       setShowAdvancedAnalysis(true);
+      
     } catch (error) {
       console.error('Audio analysis error:', error);
-      setRecognitionResult('❌ Error analyzing audio. Please try again.');
+      let errorMessage = '❌ Error analyzing audio. ';
+      
+      if (error instanceof Error) {
+        if (error.message.includes('timeout')) {
+          errorMessage += 'Analysis took too long. Please try with a shorter audio file.';
+        } else {
+          errorMessage += error.message;
+        }
+      } else {
+        errorMessage += 'Please try again.';
+      }
+      
+      setRecognitionResult(errorMessage);
     } finally {
       setIsAnalyzing(false);
     }
@@ -347,8 +364,24 @@ export default function AudioRecorder() {
                 disabled={isAnalyzing}
                 className="mt-4 w-full px-6 py-3 bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 text-white font-semibold rounded-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isAnalyzing ? 'Analyzing...' : 'Analyze with AI'}
+                {isAnalyzing ? (
+                  <div className="flex items-center justify-center gap-2">
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Analyzing Audio...
+                  </div>
+                ) : (
+                  'Analyze with AI'
+                )}
               </button>
+
+              {/* Analysis Progress */}
+              {isAnalyzing && (
+                <div className="mt-3 text-center">
+                  <p className="text-sm text-slate-400">
+                    Processing audio features... This may take a few seconds for longer files.
+                  </p>
+                </div>
+              )}
 
               {/* Toggle Advanced Analysis */}
               {audioFeatures && (

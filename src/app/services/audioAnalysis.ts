@@ -34,31 +34,41 @@ export class AudioAnalyzer {
   }
 
   async analyzeAudio(audioBlob: Blob): Promise<AudioFeatures> {
-    const arrayBuffer = await audioBlob.arrayBuffer();
-    const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
-    
-    // Create analyser node
-    this.analyser = this.audioContext.createAnalyser();
-    this.analyser.fftSize = 2048;
-    this.analyser.smoothingTimeConstant = 0.8;
-    
-    // Create buffer source
-    const source = this.audioContext.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(this.analyser);
-    
-    // Get frequency data
-    const bufferLength = this.analyser.frequencyBinCount;
-    this.frequencyData = new Float32Array(bufferLength);
-    this.dataArray = new Float32Array(bufferLength);
-    
-    // Analyze audio features
-    const features = await this.extractFeatures(audioBuffer);
-    
-    // Cleanup
-    source.disconnect();
-    
-    return features;
+    try {
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+      
+      // Create analyser node
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = 2048;
+      this.analyser.smoothingTimeConstant = 0.8;
+      
+      // Create buffer source
+      const source = this.audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this.analyser);
+      
+      // Get frequency data
+      const bufferLength = this.analyser.frequencyBinCount;
+      this.frequencyData = new Float32Array(bufferLength);
+      this.dataArray = new Float32Array(bufferLength);
+      
+      // Analyze audio features with timeout
+      const features = await Promise.race([
+        this.extractFeatures(audioBuffer),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Analysis timeout')), 10000)
+        )
+      ]);
+      
+      // Cleanup
+      source.disconnect();
+      
+      return features;
+    } catch (error) {
+      console.error('Audio analysis error:', error);
+      throw error;
+    }
   }
 
   private async extractFeatures(audioBuffer: AudioBuffer): Promise<AudioFeatures> {
@@ -71,22 +81,22 @@ export class AudioAnalyzer {
     // Calculate Zero Crossing Rate
     const zeroCrossingRate = this.calculateZeroCrossingRate(channelData);
     
-    // Perform FFT analysis
-    const fftData = this.performFFT(channelData);
+    // Use Web Audio API for frequency analysis instead of custom FFT
+    const frequencyData = await this.getFrequencyDataFromAnalyser(audioBuffer);
     
     // Calculate spectral features
-    const spectralCentroid = this.calculateSpectralCentroid(fftData.frequencies, fftData.magnitudes);
-    const spectralRolloff = this.calculateSpectralRolloff(fftData.frequencies, fftData.magnitudes);
-    const spectralFlatness = this.calculateSpectralFlatness(fftData.magnitudes);
+    const spectralCentroid = this.calculateSpectralCentroid(frequencyData.frequencies, frequencyData.magnitudes);
+    const spectralRolloff = this.calculateSpectralRolloff(frequencyData.frequencies, frequencyData.magnitudes);
+    const spectralFlatness = this.calculateSpectralFlatness(frequencyData.magnitudes);
     
     // Calculate frequency bands
-    const frequencyBands = this.calculateFrequencyBands(fftData.frequencies, fftData.magnitudes);
+    const frequencyBands = this.calculateFrequencyBands(frequencyData.frequencies, frequencyData.magnitudes);
     
     // Find dominant frequencies
-    const dominantFrequencies = this.findDominantFrequencies(fftData.frequencies, fftData.magnitudes);
+    const dominantFrequencies = this.findDominantFrequencies(frequencyData.frequencies, frequencyData.magnitudes);
     
     // Estimate pitch
-    const pitch = this.estimatePitch(fftData.frequencies, fftData.magnitudes);
+    const pitch = this.estimatePitch(frequencyData.frequencies, frequencyData.magnitudes);
     
     // Estimate tempo
     const tempo = this.estimateTempo(channelData, sampleRate);
@@ -102,6 +112,37 @@ export class AudioAnalyzer {
       pitch,
       tempo
     };
+  }
+
+  private async getFrequencyDataFromAnalyser(audioBuffer: AudioBuffer): Promise<{ frequencies: number[], magnitudes: number[] }> {
+    // Use Web Audio API's built-in frequency analysis
+    const analyser = this.audioContext.createAnalyser();
+    analyser.fftSize = 2048;
+    
+    const source = this.audioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(analyser);
+    
+    const frequencyData = new Float32Array(analyser.frequencyBinCount);
+    analyser.getFloatFrequencyData(frequencyData);
+    
+    // Convert to positive values and create frequency array
+    const frequencies: number[] = [];
+    const magnitudes: number[] = [];
+    
+    for (let i = 0; i < frequencyData.length; i++) {
+      const frequency = (i * this.audioContext.sampleRate) / analyser.fftSize;
+      const magnitude = Math.abs(frequencyData[i]);
+      
+      frequencies.push(frequency);
+      magnitudes.push(magnitude);
+    }
+    
+    // Cleanup
+    source.disconnect();
+    analyser.disconnect();
+    
+    return { frequencies, magnitudes };
   }
 
   private calculateRMSEnergy(channelData: Float32Array): number {
@@ -121,35 +162,6 @@ export class AudioAnalyzer {
       }
     }
     return crossings / (channelData.length - 1);
-  }
-
-  private performFFT(channelData: Float32Array): { frequencies: number[], magnitudes: number[] } {
-    // Simple FFT implementation for demonstration
-    // In production, you might want to use a more optimized FFT library
-    const n = channelData.length;
-    const frequencies: number[] = [];
-    const magnitudes: number[] = [];
-    
-    // Calculate frequency bins
-    for (let k = 0; k < n / 2; k++) {
-      const frequency = (k * 44100) / n; // Assuming 44.1kHz sample rate
-      frequencies.push(frequency);
-      
-      // Simple magnitude calculation (this is a simplified version)
-      let real = 0;
-      let imag = 0;
-      
-      for (let i = 0; i < n; i++) {
-        const angle = (2 * Math.PI * k * i) / n;
-        real += channelData[i] * Math.cos(angle);
-        imag += channelData[i] * Math.sin(angle);
-      }
-      
-      const magnitude = Math.sqrt(real * real + imag * imag);
-      magnitudes.push(magnitude);
-    }
-    
-    return { frequencies, magnitudes };
   }
 
   private calculateSpectralCentroid(frequencies: number[], magnitudes: number[]): number {
