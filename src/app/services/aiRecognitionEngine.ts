@@ -273,11 +273,37 @@ export class AIRecognitionEngine {
       }
     }
 
-    // Audio classification results
+    // Audio classification results - prioritize animal sounds and specific classifications
     if (audioClassification.primaryClassification.confidence > confidence) {
-      primaryRecognition = `${audioClassification.primaryClassification.label}: ${audioClassification.primaryClassification.description}`;
-      confidence = audioClassification.primaryClassification.confidence;
-      audioType = audioClassification.audioType;
+      const classification = audioClassification.primaryClassification;
+      
+      // Special handling for animal sounds
+      if (classification.category === 'animal') {
+        primaryRecognition = `${classification.label}: ${classification.description}`;
+        confidence = Math.max(confidence, classification.confidence);
+        audioType = 'environmental'; // Animal sounds are environmental
+        detectedContent.push('Animal Sound', `Species: ${classification.label}`, `Type: ${classification.description}`);
+      }
+      // Special handling for music
+      else if (classification.category === 'music') {
+        primaryRecognition = `${classification.label}: ${classification.description}`;
+        confidence = Math.max(confidence, classification.confidence);
+        audioType = 'music';
+        detectedContent.push('Musical Content', `Genre: ${classification.label}`, `Style: ${classification.description}`);
+      }
+      // Special handling for speech
+      else if (classification.category === 'speech') {
+        primaryRecognition = `${classification.label}: ${classification.description}`;
+        confidence = Math.max(confidence, classification.confidence);
+        audioType = 'speech';
+        detectedContent.push('Vocal Content', `Type: ${classification.label}`, `Style: ${classification.description}`);
+      }
+      // Default handling for other categories
+      else {
+        primaryRecognition = `${classification.label}: ${classification.description}`;
+        confidence = Math.max(confidence, classification.confidence);
+        audioType = audioClassification.audioType;
+      }
     }
 
     // Add classification details
