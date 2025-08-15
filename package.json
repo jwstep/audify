@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@types/wavesurfer.js": "^6.0.12",
+    "fft-js": "^0.0.12",
     "lucide-react": "^0.539.0",
+    "ml-matrix": "^6.12.1",
     "next": "15.4.6",
     "react": "19.1.0",
     "react-dom": "19.1.0",
