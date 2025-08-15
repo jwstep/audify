@@ -105,9 +105,24 @@ export default function AudioRecorder() {
   // Handle file upload
   const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file && file.type.startsWith('audio/')) {
+    if (!file) return;
+    
+    // Validate file type
+    if (!file.type.startsWith('audio/')) {
+      alert('Please select an audio file (MP3, WAV, etc.)');
+      return;
+    }
+    
+    // Validate file size (max 50MB)
+    if (file.size > 50 * 1024 * 1024) {
+      alert('File size too large. Please select a file smaller than 50MB.');
+      return;
+    }
+
+    try {
       const audioUrl = URL.createObjectURL(file);
       const audio = new Audio(audioUrl);
+      
       audio.onloadedmetadata = () => {
         setAudioData({
           blob: file,
@@ -115,7 +130,18 @@ export default function AudioRecorder() {
           duration: audio.duration,
           timestamp: new Date()
         });
+        // Clear the file input
+        event.target.value = '';
       };
+      
+      audio.onerror = () => {
+        alert('Failed to load audio file. Please try a different file.');
+        URL.revokeObjectURL(audioUrl);
+      };
+      
+    } catch (error) {
+      console.error('Error processing audio file:', error);
+      alert('Error processing audio file. Please try again.');
     }
   }, []);
 
