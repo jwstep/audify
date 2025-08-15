@@ -36,13 +36,26 @@ export class AIRecognitionEngine {
   private classificationService: any; // Will be imported when needed
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private audioAnalyzer: any; // Will be imported when needed
+  private isInitializing: boolean = false;
+  private initializationPromise: Promise<void> | null = null;
 
   constructor() {
-    // Lazy load services to avoid circular dependencies
+    // Start initialization immediately
     this.initializeServices();
   }
 
   private async initializeServices() {
+    if (this.isInitializing) {
+      return this.initializationPromise;
+    }
+
+    this.isInitializing = true;
+    this.initializationPromise = this.performInitialization();
+    
+    return this.initializationPromise;
+  }
+
+  private async performInitialization() {
     try {
       // Dynamic imports to avoid circular dependencies
       const { SpeechRecognitionService } = await import('./speechRecognition');
@@ -52,8 +65,13 @@ export class AIRecognitionEngine {
       this.speechService = new SpeechRecognitionService();
       this.classificationService = new AudioClassificationService();
       this.audioAnalyzer = new AudioAnalyzer();
+      
+      console.log('AI services initialized successfully');
     } catch (error) {
       console.error('Failed to initialize AI services:', error);
+      // Don't throw here, let the recognition handle it gracefully
+    } finally {
+      this.isInitializing = false;
     }
   }
 
@@ -72,8 +90,8 @@ export class AIRecognitionEngine {
         message: 'Initializing AI recognition services...'
       });
 
-      // Wait for services to be ready
-      await this.waitForServices();
+      // Wait for services to be ready with timeout
+      await this.waitForServicesWithTimeout();
 
       // Update progress
       onProgress?.({
@@ -85,7 +103,9 @@ export class AIRecognitionEngine {
       // Perform speech recognition
       let speechAnalysis: SpeechAnalysisResult | undefined;
       try {
-        speechAnalysis = await this.speechService.analyzeAudioFile(audioBlob);
+        if (this.speechService) {
+          speechAnalysis = await this.speechService.analyzeAudioFile(audioBlob);
+        }
       } catch (error) {
         console.log('Speech recognition failed, continuing with other analysis:', error);
       }
@@ -98,7 +118,18 @@ export class AIRecognitionEngine {
       });
 
       // Perform audio classification
-      const audioClassification = await this.classificationService.classifyAudio(audioBlob);
+      let audioClassification: ClassificationAnalysis;
+      try {
+        if (this.classificationService) {
+          audioClassification = await this.classificationService.classifyAudio(audioBlob);
+        } else {
+          throw new Error('Classification service not available');
+        }
+      } catch (error) {
+        console.error('Audio classification failed:', error);
+        // Create fallback classification
+        audioClassification = this.createFallbackClassification();
+      }
 
       // Update progress
       onProgress?.({
@@ -108,7 +139,18 @@ export class AIRecognitionEngine {
       });
 
       // Perform spectral analysis
-      const spectralFeatures = await this.audioAnalyzer.analyzeAudio(audioBlob);
+      let spectralFeatures: AudioFeatures;
+      try {
+        if (this.audioAnalyzer) {
+          spectralFeatures = await this.audioAnalyzer.analyzeAudio(audioBlob);
+        } else {
+          throw new Error('Spectral analyzer not available');
+        }
+      } catch (error) {
+        console.error('Spectral analysis failed:', error);
+        // Create fallback features
+        spectralFeatures = this.createFallbackFeatures();
+      }
 
       // Update progress
       onProgress?.({
@@ -143,21 +185,63 @@ export class AIRecognitionEngine {
     }
   }
 
-  // Wait for all services to be initialized
-  private async waitForServices(): Promise<void> {
-    let attempts = 0;
-    const maxAttempts = 10;
+  // Wait for services with timeout
+  private async waitForServicesWithTimeout(): Promise<void> {
+    const timeout = 5000; // 5 second timeout
+    const startTime = Date.now();
     
-    while (attempts < maxAttempts) {
+    while (Date.now() - startTime < timeout) {
       if (this.speechService && this.classificationService && this.audioAnalyzer) {
         return;
       }
       
+      // If still initializing, wait a bit more
+      if (this.isInitializing) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        continue;
+      }
+      
+      // If not initializing and services aren't ready, try to initialize again
+      if (!this.isInitializing) {
+        await this.initializeServices();
+      }
+      
       await new Promise(resolve => setTimeout(resolve, 100));
-      attempts++;
     }
     
-    throw new Error('Failed to initialize AI services');
+    throw new Error('AI services failed to initialize within 5 seconds');
+  }
+
+  // Create fallback classification when service fails
+  private createFallbackClassification(): ClassificationAnalysis {
+    return {
+      primaryClassification: {
+        label: 'Audio Content',
+        confidence: 0.5,
+        category: 'other',
+        description: 'General audio content detected',
+        tags: ['audio', 'content', 'general']
+      },
+      secondaryClassifications: [],
+      overallConfidence: 0.5,
+      detectedCategories: ['other'],
+      audioType: 'mixed'
+    };
+  }
+
+  // Create fallback features when spectral analysis fails
+  private createFallbackFeatures(): AudioFeatures {
+    return {
+      spectralCentroid: 0,
+      spectralRolloff: 0,
+      spectralFlatness: 0,
+      zeroCrossingRate: 0,
+      rmsEnergy: 0,
+      dominantFrequencies: [],
+      frequencyBands: { low: 0, mid: 0, high: 0 },
+      pitch: 0,
+      tempo: 0
+    };
   }
 
   // Combine all analysis results into a comprehensive recognition

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Mic, Upload, Play, Square, Trash2, FileAudio, BarChart3, Brain, Sparkles } from 'lucide-react';
 import AudioVisualizer from './AudioVisualizer';
 import SpectralAnalyzer from './SpectralAnalyzer';
@@ -25,6 +25,7 @@ export default function AudioRecorder() {
   const [showAdvancedAnalysis, setShowAdvancedAnalysis] = useState(false);
   const [aiRecognitionResult, setAiRecognitionResult] = useState<AIRecognitionResult | null>(null);
   const [recognitionProgress, setRecognitionProgress] = useState<RecognitionProgress | null>(null);
+  const [aiStatus, setAiStatus] = useState<'initializing' | 'ready' | 'error'>('initializing');
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -39,6 +40,35 @@ export default function AudioRecorder() {
     }
     return aiEngineRef.current;
   }, []);
+
+  // Check AI availability
+  const checkAIAvailability = useCallback(async () => {
+    const aiEngine = getAIEngine();
+    
+    // Wait a bit for services to initialize
+    let attempts = 0;
+    const maxAttempts = 20; // 2 seconds total
+    
+    while (attempts < maxAttempts) {
+      if (aiEngine.isAIAvailable()) {
+        setAiStatus('ready');
+        return true;
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+      attempts++;
+    }
+    
+    setAiStatus('error');
+    return false;
+  }, [getAIEngine]);
+
+  // Check AI status on mount
+  useEffect(() => {
+    const checkStatus = async () => {
+      await checkAIAvailability();
+    };
+    checkStatus();
+  }, [checkAIAvailability]);
 
   // Start recording
   const startRecording = useCallback(async () => {
@@ -175,9 +205,10 @@ export default function AudioRecorder() {
       // Get AI engine
       const aiEngine = getAIEngine();
       
-      // Check if AI is available
-      if (!aiEngine.isAIAvailable()) {
-        throw new Error('AI services are still initializing. Please wait a moment and try again.');
+      // Check if AI is available with better error handling
+      const isAvailable = await checkAIAvailability();
+      if (!isAvailable) {
+        throw new Error('AI services are taking longer than expected to initialize. Please try again in a few seconds.');
       }
       
       // Perform AI recognition with progress tracking
@@ -228,7 +259,7 @@ export default function AudioRecorder() {
       setIsAnalyzing(false);
       setRecognitionProgress(null);
     }
-  }, [audioData, getAIEngine]);
+  }, [audioData, getAIEngine, checkAIAvailability]);
 
   // Handle real-time audio data
   const handleRealTimeAudioData = useCallback((data: Float32Array) => {
@@ -244,6 +275,23 @@ export default function AudioRecorder() {
         <div className="text-center mb-6">
           <h2 className="text-2xl font-semibold text-white mb-2">Record Audio</h2>
           <p className="text-slate-300">Use your microphone or upload an audio file</p>
+          
+          {/* AI Status Indicator */}
+          <div className="mt-4 flex items-center justify-center gap-2">
+            <Brain className="w-5 h-5" />
+            <span className="text-sm">
+              AI Status: 
+              {aiStatus === 'initializing' && (
+                <span className="text-yellow-400 ml-1">Initializing...</span>
+              )}
+              {aiStatus === 'ready' && (
+                <span className="text-green-400 ml-1">Ready</span>
+              )}
+              {aiStatus === 'error' && (
+                <span className="text-red-400 ml-1">Error</span>
+              )}
+            </span>
+          </div>
         </div>
         
         <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
