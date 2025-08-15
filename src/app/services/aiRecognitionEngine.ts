@@ -1,6 +1,7 @@
 import { AudioFeatures } from './audioAnalysis';
 import { SpeechAnalysisResult } from './speechRecognition';
 import { ClassificationAnalysis } from './audioClassification';
+import { TensorFlowAudioRecognitionService, TensorFlowAnalysis } from './tensorflowAudioRecognition';
 
 export interface AIRecognitionResult {
   // Primary recognition results
@@ -11,6 +12,7 @@ export interface AIRecognitionResult {
   speechAnalysis?: SpeechAnalysisResult;
   audioClassification: ClassificationAnalysis;
   spectralFeatures: AudioFeatures;
+  tensorFlowAnalysis?: TensorFlowAnalysis;
   
   // Combined insights
   audioType: 'music' | 'speech' | 'mixed' | 'environmental' | 'unknown';
@@ -24,7 +26,7 @@ export interface AIRecognitionResult {
 }
 
 export interface RecognitionProgress {
-  stage: 'initializing' | 'speech' | 'classification' | 'spectral' | 'combining' | 'complete';
+  stage: 'initializing' | 'speech' | 'classification' | 'spectral' | 'tensorflow' | 'combining' | 'complete';
   progress: number;
   message: string;
 }
@@ -36,11 +38,14 @@ export class AIRecognitionEngine {
   private classificationService: any; // Will be imported when needed
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private audioAnalyzer: any; // Will be imported when needed
+  private tensorFlowService: TensorFlowAudioRecognitionService;
   private isInitializing: boolean = false;
   private initializationPromise: Promise<void> | null = null;
 
   constructor() {
-    // Start initialization immediately
+    // Initialize TensorFlow service immediately
+    this.tensorFlowService = new TensorFlowAudioRecognitionService();
+    // Start initialization
     this.initializeServices();
   }
 
@@ -65,6 +70,9 @@ export class AIRecognitionEngine {
       this.speechService = new SpeechRecognitionService();
       this.classificationService = new AudioClassificationService();
       this.audioAnalyzer = new AudioAnalyzer();
+      
+      // Initialize TensorFlow service
+      await this.tensorFlowService.loadModel();
       
       console.log('AI services initialized successfully');
     } catch (error) {
@@ -96,7 +104,7 @@ export class AIRecognitionEngine {
       // Update progress
       onProgress?.({
         stage: 'speech',
-        progress: 25,
+        progress: 20,
         message: 'Analyzing speech content...'
       });
 
@@ -113,7 +121,7 @@ export class AIRecognitionEngine {
       // Update progress
       onProgress?.({
         stage: 'classification',
-        progress: 50,
+        progress: 35,
         message: 'Classifying audio content...'
       });
 
@@ -134,7 +142,7 @@ export class AIRecognitionEngine {
       // Update progress
       onProgress?.({
         stage: 'spectral',
-        progress: 75,
+        progress: 50,
         message: 'Analyzing spectral features...'
       });
 
@@ -152,6 +160,23 @@ export class AIRecognitionEngine {
         spectralFeatures = this.createFallbackFeatures();
       }
 
+      // Update progress - NEW TENSORFLOW AI ANALYSIS
+      onProgress?.({
+        stage: 'tensorflow',
+        progress: 70,
+        message: 'Running TensorFlow AI analysis...'
+      });
+
+      // Perform TensorFlow AI analysis
+      let tensorFlowAnalysis: TensorFlowAnalysis | undefined;
+      try {
+        if (this.tensorFlowService.isReady()) {
+          tensorFlowAnalysis = await this.tensorFlowService.analyzeAudio(audioBlob);
+        }
+      } catch (error) {
+        console.error('TensorFlow analysis failed:', error);
+      }
+
       // Update progress
       onProgress?.({
         stage: 'combining',
@@ -163,7 +188,8 @@ export class AIRecognitionEngine {
       const result = this.combineResults(
         speechAnalysis,
         audioClassification,
-        spectralFeatures
+        spectralFeatures,
+        tensorFlowAnalysis
       );
 
       // Update progress
@@ -191,7 +217,7 @@ export class AIRecognitionEngine {
     const startTime = Date.now();
     
     while (Date.now() - startTime < timeout) {
-      if (this.speechService && this.classificationService && this.audioAnalyzer) {
+      if (this.speechService && this.classificationService && this.audioAnalyzer && this.tensorFlowService.isReady()) {
         return;
       }
       
@@ -248,10 +274,11 @@ export class AIRecognitionEngine {
   private combineResults(
     speechAnalysis: SpeechAnalysisResult | undefined,
     audioClassification: ClassificationAnalysis,
-    spectralFeatures: AudioFeatures
+    spectralFeatures: AudioFeatures,
+    tensorFlowAnalysis?: TensorFlowAnalysis
   ): Omit<AIRecognitionResult, 'analysisTime' | 'timestamp'> {
     
-    // Determine primary recognition
+    // Determine primary recognition - PRIORITIZE TENSORFLOW AI RESULTS
     let primaryRecognition = '';
     let confidence = 0;
     let audioType: AIRecognitionResult['audioType'] = 'unknown';
@@ -259,8 +286,21 @@ export class AIRecognitionEngine {
     let language: string | undefined;
     let sentiment: 'positive' | 'negative' | 'neutral' | undefined;
 
-    // Speech analysis results
-    if (speechAnalysis) {
+    // PRIORITY 1: TensorFlow AI results (most accurate)
+    if (tensorFlowAnalysis && tensorFlowAnalysis.primaryRecognition.confidence > confidence) {
+      const tfResult = tensorFlowAnalysis.primaryRecognition;
+      primaryRecognition = `${tfResult.label}: ${tfResult.description}`;
+      confidence = tfResult.confidence;
+      audioType = this.mapCategoryToAudioType(tfResult.category);
+      detectedContent.push('AI Recognition', `Type: ${tfResult.label}`, `Category: ${tfResult.category}`);
+      
+      if (tfResult.tags.length > 0) {
+        detectedContent.push(`Tags: ${tfResult.tags.slice(0, 3).join(', ')}`);
+      }
+    }
+
+    // PRIORITY 2: Speech analysis results
+    if (speechAnalysis && speechAnalysis.confidence > confidence) {
       primaryRecognition = `Speech detected: "${speechAnalysis.transcription}"`;
       confidence = speechAnalysis.confidence;
       audioType = 'speech';
@@ -273,7 +313,7 @@ export class AIRecognitionEngine {
       }
     }
 
-    // Audio classification results - prioritize animal sounds and specific classifications
+    // PRIORITY 3: Audio classification results
     if (audioClassification.primaryClassification.confidence > confidence) {
       const classification = audioClassification.primaryClassification;
       
@@ -304,6 +344,15 @@ export class AIRecognitionEngine {
         confidence = Math.max(confidence, classification.confidence);
         audioType = audioClassification.audioType;
       }
+    }
+
+    // Add TensorFlow AI insights if available
+    if (tensorFlowAnalysis) {
+      detectedContent.push(
+        `AI Model: ${tensorFlowAnalysis.modelUsed}`,
+        `AI Confidence: ${(tensorFlowAnalysis.overallConfidence * 100).toFixed(1)}%`,
+        `AI Processing: ${tensorFlowAnalysis.processingTime}ms`
+      );
     }
 
     // Add classification details
@@ -346,11 +395,23 @@ export class AIRecognitionEngine {
       speechAnalysis,
       audioClassification,
       spectralFeatures,
+      tensorFlowAnalysis,
       audioType,
       detectedContent,
       language,
       sentiment
     };
+  }
+
+  // Map category to audio type
+  private mapCategoryToAudioType(category: string): AIRecognitionResult['audioType'] {
+    switch (category) {
+      case 'music': return 'music';
+      case 'speech': return 'speech';
+      case 'animal': return 'environmental';
+      case 'environmental': return 'environmental';
+      default: return 'mixed';
+    }
   }
 
   // Get recognition summary for display
@@ -399,7 +460,7 @@ export class AIRecognitionEngine {
 
   // Check if AI services are available
   isAIAvailable(): boolean {
-    return !!(this.speechService && this.classificationService && this.audioAnalyzer);
+    return !!(this.speechService && this.classificationService && this.audioAnalyzer && this.tensorFlowService.isReady());
   }
 
   // Get service status

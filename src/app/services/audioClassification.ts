@@ -84,8 +84,32 @@ export class AudioClassificationService {
       let confidence = 0;
       let tags: string[] = [];
 
-      // Music detection based on spectral characteristics
-      if (spectralFlatness < 0.2 && spectralCentroid > 1000) {
+      // Environmental sounds FIRST (thunder, rain, wind, etc.)
+      if (spectralFlatness > 0.6) {
+        label = 'Environmental Sound';
+        category = 'environmental';
+        description = 'Natural environmental audio detected';
+        confidence = 0.85;
+        tags = ['environmental', 'nature', 'ambient'];
+      }
+      // Low-frequency environmental sounds (thunder, explosions, etc.)
+      else if (spectralCentroid < 300 && spectralRolloff < 2000) {
+        label = 'Low-Frequency Environmental';
+        category = 'environmental';
+        description = 'Low-frequency environmental sound (thunder, explosion, etc.)';
+        confidence = 0.88;
+        tags = ['environmental', 'low-frequency', 'thunder', 'explosion'];
+      }
+      // High-frequency environmental sounds (rain, wind, etc.)
+      else if (spectralCentroid > 3000 && spectralRolloff > 8000) {
+        label = 'High-Frequency Environmental';
+        category = 'environmental';
+        description = 'High-frequency environmental sound (rain, wind, etc.)';
+        confidence = 0.82;
+        tags = ['environmental', 'high-frequency', 'rain', 'wind'];
+      }
+      // Music detection - more strict conditions
+      else if (spectralFlatness < 0.15 && spectralCentroid > 1200 && spectralRolloff > 3000) {
         label = 'Musical Content';
         category = 'music';
         description = 'Harmonic musical content detected';
@@ -93,7 +117,7 @@ export class AudioClassificationService {
         tags = ['music', 'harmonic', 'melodic'];
       }
       // Speech detection based on spectral patterns
-      else if (spectralCentroid > 800 && spectralCentroid < 3000 && spectralRolloff < 4000) {
+      else if (spectralCentroid > 800 && spectralCentroid < 3000 && spectralRolloff < 4000 && spectralFlatness > 0.2) {
         label = 'Human Speech';
         category = 'speech';
         description = 'Human vocal communication detected';
@@ -101,15 +125,15 @@ export class AudioClassificationService {
         tags = ['speech', 'human', 'voice', 'vocal'];
       }
       // Animal sounds based on frequency characteristics
-      else if (spectralCentroid > 2000 && spectralRolloff > 6000) {
+      else if (spectralCentroid > 2000 && spectralRolloff > 6000 && spectralFlatness < 0.4) {
         label = 'High-Frequency Sound';
         category = 'animal';
         description = 'High-pitched sound, possibly animal vocalization';
         confidence = 0.78;
         tags = ['high-frequency', 'animal', 'vocalization'];
       }
-      // Environmental sounds
-      else if (spectralFlatness > 0.5) {
+      // General environmental sounds
+      else if (spectralFlatness > 0.4) {
         label = 'Environmental Noise';
         category = 'environmental';
         description = 'Background environmental sounds';

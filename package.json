@@ -9,6 +9,8 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-backend-webgl": "^4.22.0",
     "@types/wavesurfer.js": "^6.0.12",
     "fft-js": "^0.0.12",
     "lucide-react": "^0.539.0",
